@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # 1. POSTGRESQL WITH PGVECTOR EXTENSION
+  # ============================================================================
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: rag_postgres_vector
+    restart: always
+    environment:
+      # >>> USER INSERTION MARKER: POSTGRESQL DATABASE CREDENTIALS <<<
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-rag_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rag_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag_network
+
+  # ============================================================================
+  # 2. PGADMIN 4 (DATABASE WEB MANAGEMENT INTERFACE)
+  # ============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: rag_pgadmin
+    restart: always
+    environment:
+      # >>> USER INSERTION MARKER: PGADMIN LOGIN CREDENTIALS <<<
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@rag.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin_secret}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - rag_network
+
+  # ============================================================================
+  # 3. BACKEND SERVICE (FASTAPI + LANGGRAPH + FREE EMBEDDINGS)
+  # ============================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: rag_backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-rag_db}
+      - VECTOR_STORE_BACKEND=auto
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./chroma_db:/app/chroma_db
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - rag_network
+
+  # ============================================================================
+  # 4. FRONTEND SERVICE (REACT + VITE + NGINX)
+  # ============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - rag_network
+
+networks:
+  rag_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  pgadmin_data:
